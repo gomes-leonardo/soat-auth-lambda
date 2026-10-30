@@ -80,6 +80,15 @@ data "aws_iam_policy_document" "trust" {
 # com mais poder que isto.
 data "aws_iam_policy_document" "function_boundary" {
   statement {
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.sa-east-1.amazonaws.com"]
+    }
+  }
+  statement {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["arn:aws:logs:sa-east-1:${local.account}:log-group:/aws/lambda/soat-*"]
   }

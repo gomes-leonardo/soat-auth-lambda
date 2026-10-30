@@ -69,6 +69,15 @@ resource "aws_iam_role" "auth_cpf" {
 
 data "aws_iam_policy_document" "auth_cpf" {
   statement {
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${var.region}.amazonaws.com"]
+    }
+  }
+  statement {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.auth_cpf.arn}:*"]
   }
@@ -95,6 +104,15 @@ resource "aws_iam_role" "notifier" {
 }
 
 data "aws_iam_policy_document" "notifier" {
+  statement {
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${var.region}.amazonaws.com"]
+    }
+  }
   statement {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.notifier.arn}:*"]
