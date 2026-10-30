@@ -23,8 +23,8 @@ const STATE_LABEL: Record<string, string> = {
   ACKNOWLEDGED: 'RECONHECIDO',
 };
 
-/** O SNS recusa assunto de e-mail com mais de 100 caracteres. */
-const SUBJECT_MAX = 100;
+/** O SNS exige assunto com menos de 100 caracteres e sem quebra de linha. */
+const SUBJECT_MAX = 99;
 
 /**
  * Transforma o payload do workflow de alertas num e-mail que se le sem abrir
@@ -34,7 +34,10 @@ const SUBJECT_MAX = 100;
 export function formatAlert(payload: AlertPayload, environment: string): Email {
   const state = STATE_LABEL[payload.state ?? ''] ?? payload.state ?? 'ALERTA';
   const title = payload.title ?? 'Alerta sem titulo';
-  const subject = `[SOAT][${environment}][${state}] ${title}`.slice(0, SUBJECT_MAX);
+  const subject = `[SOAT][${environment}][${state}] ${title}`
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1F\x7F]+/g, ' ')
+    .slice(0, SUBJECT_MAX);
 
   const tags = payload.tags ?? {};
   const lines = [

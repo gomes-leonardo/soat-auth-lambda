@@ -9,7 +9,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.80"
+      version = "~> 6.0"
     }
   }
 }
@@ -38,13 +38,16 @@ data "aws_caller_identity" "current" {}
 
 locals {
   account = data.aws_caller_identity.current.account_id
-  # So push em develop e main assume o papel; pull request nunca.
+  # Jobs de deploy declaram `environment`, e o GitHub emite o sub nesse
+  # formato. Cada Environment so aceita a sua branch (hml <- develop,
+  # prd <- main), configurado no repositorio: pull request nunca chega aqui.
   subjects = flatten([
     for repo in var.repositories : [
-      "repo:${var.github_owner}/${repo}:ref:refs/heads/main",
-      "repo:${var.github_owner}/${repo}:ref:refs/heads/develop",
+      "repo:${var.github_owner}/${repo}:environment:hml",
+      "repo:${var.github_owner}/${repo}:environment:prd",
     ]
   ])
+  boundary_arn = "arn:aws:iam::${local.account}:policy/soat-function-boundary"
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
@@ -72,8 +75,33 @@ data "aws_iam_policy_document" "trust" {
   }
 }
 
+# Teto de tudo que as funcoes podem fazer. Os papeis que o pipeline cria so
+# nascem com este boundary, entao nem um pipeline comprometido cria papel
+# com mais poder que isto.
+data "aws_iam_policy_document" "function_boundary" {
+  statement {
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["arn:aws:logs:sa-east-1:${local.account}:log-group:/aws/lambda/soat-*"]
+  }
+  statement {
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:sa-east-1:${local.account}:parameter/soat/*"]
+  }
+  statement {
+    actions   = ["sns:Publish"]
+    resources = ["arn:aws:sns:sa-east-1:${local.account}:soat-*"]
+  }
+}
+
+resource "aws_iam_policy" "function_boundary" {
+  name   = "soat-function-boundary"
+  policy = data.aws_iam_policy_document.function_boundary.json
+}
+
+# Fora do padrao soat-* de proposito: o papel de deploy nao pode editar a si
+# mesmo pelas permissoes que tem sobre os papeis das funcoes.
 resource "aws_iam_role" "deployer" {
-  name                 = "soat-gha-deployer"
+  name                 = "gha-soat-deployer"
   assume_role_policy   = data.aws_iam_policy_document.trust.json
   max_session_duration = 3600
 }
@@ -124,11 +152,32 @@ data "aws_iam_policy_document" "deployer" {
   }
 
   statement {
-    sid = "FunctionRoles"
+    sid = "FunctionRolesRead"
     actions = [
-      "iam:GetRole", "iam:CreateRole", "iam:DeleteRole", "iam:UpdateAssumeRolePolicy",
-      "iam:TagRole", "iam:UntagRole", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
-      "iam:GetRolePolicy", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:ListInstanceProfilesForRole",
+      "iam:GetRole", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
+      "iam:GetRolePolicy", "iam:ListInstanceProfilesForRole", "iam:GetPolicy",
+      "iam:GetPolicyVersion",
+    ]
+    resources = ["arn:aws:iam::${local.account}:role/soat-*", aws_iam_policy.function_boundary.arn]
+  }
+
+  # Criar papel e escrever politica so com o boundary presente.
+  statement {
+    sid       = "FunctionRolesWrite"
+    actions   = ["iam:CreateRole", "iam:PutRolePolicy", "iam:PutRolePermissionsBoundary"]
+    resources = ["arn:aws:iam::${local.account}:role/soat-*"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PermissionsBoundary"
+      values   = [local.boundary_arn]
+    }
+  }
+
+  statement {
+    sid = "FunctionRolesMaintain"
+    actions = [
+      "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:UpdateAssumeRolePolicy",
+      "iam:TagRole", "iam:UntagRole",
     ]
     resources = ["arn:aws:iam::${local.account}:role/soat-*"]
   }
@@ -143,10 +192,20 @@ data "aws_iam_policy_document" "deployer" {
       values   = ["lambda.amazonaws.com"]
     }
   }
+
+  statement {
+    sid    = "KeepBoundary"
+    effect = "Deny"
+    actions = [
+      "iam:DeleteRolePermissionsBoundary", "iam:CreatePolicyVersion",
+      "iam:DeletePolicy", "iam:SetDefaultPolicyVersion",
+    ]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role_policy" "deployer" {
-  name   = "soat-gha-deployer"
+  name   = "gha-soat-deployer"
   role   = aws_iam_role.deployer.id
   policy = data.aws_iam_policy_document.deployer.json
 }

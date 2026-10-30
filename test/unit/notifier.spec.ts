@@ -38,8 +38,14 @@ describe('formatAlert', () => {
     expect(email.message).not.toContain('trace_id');
   });
 
-  it('corta o assunto em 100 caracteres, o limite do SNS', () => {
-    expect(formatAlert({ ...OPENED, title: 'x'.repeat(200) }, 'prd').subject).toHaveLength(100);
+  it('corta o assunto abaixo de 100 caracteres, o limite do SNS', () => {
+    expect(formatAlert({ ...OPENED, title: 'x'.repeat(200) }, 'prd').subject).toHaveLength(99);
+  });
+
+  it('troca quebra de linha e caractere de controle por espaco no assunto', () => {
+    expect(formatAlert({ ...OPENED, title: 'API\nfora\tdo ar' }, 'prd').subject).toBe(
+      '[SOAT][prd][ABERTO] API fora do ar',
+    );
   });
 });
 

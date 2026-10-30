@@ -71,4 +71,29 @@ describe('autenticacao por CPF', () => {
     expect(result.statusCode).toBe(401);
     expect(JSON.parse(result.body as string)).toEqual({ error: 'unauthorized' });
   });
+
+  describe('origem', () => {
+    const ORIGIN = 'segredo-de-origem';
+    const behindGateway = createAuthCpf({
+      findActiveClientId,
+      signToken: async (clientId) => signClientToken(clientId, SECRET),
+      originSecret: async () => ORIGIN,
+    });
+    const call = (headers: Record<string, string>) =>
+      behindGateway({ body: JSON.stringify({ cpf: ACTIVE_CPF }), isBase64Encoded: false, headers });
+
+    it('aceita a chamada que vem do Kong, com o segredo de origem', async () => {
+      expect((await call({ 'x-soat-origin': ORIGIN })).statusCode).toBe(200);
+    });
+
+    it.each([
+      ['sem o header', {}],
+      ['com o segredo errado', { 'x-soat-origin': 'outro' }],
+    ])('recusa com 403 a chamada direta %s, sem consultar o banco', async (_caso, headers) => {
+      const result = await call(headers);
+
+      expect(result.statusCode).toBe(403);
+      expect(findActiveClientId).not.toHaveBeenCalled();
+    });
+  });
 });

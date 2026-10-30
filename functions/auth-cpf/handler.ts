@@ -24,6 +24,7 @@ const authCpf = createAuthCpf({
   findActiveClientId: async (cpf) => findActiveClientId(await getPool(), cpf),
   signToken: async (clientId) =>
     signClientToken(clientId, await readParameter(requiredEnv('JWT_SECRET_PARAM'))),
+  originSecret: () => readParameter(requiredEnv('ORIGIN_SECRET_PARAM')),
 });
 
 export async function handler(event: HttpEvent): Promise<HttpResult> {

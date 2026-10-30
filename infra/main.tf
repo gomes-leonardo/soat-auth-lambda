@@ -23,8 +23,27 @@ resource "aws_ssm_parameter" "notifier_webhook" {
 }
 
 # ---------------------------------------------------------------------------
-# Papel das funcoes: logs, leitura dos parametros do proprio ambiente e
-# publicacao no topico de alertas. Nada alem disso.
+# Segredo de origem: o Kong o injeta no header X-Soat-Origin. Sem ele a funcao
+# de autenticacao recusa a chamada, entao bater direto na Function URL nao
+# contorna o rate limit do gateway.
+# ---------------------------------------------------------------------------
+
+resource "random_password" "auth_origin" {
+  length  = 48
+  special = false
+}
+
+resource "aws_ssm_parameter" "auth_origin" {
+  name        = "${local.param_prefix}/auth/origin-secret"
+  description = "Header que o Kong apresenta a funcao de autenticacao por CPF"
+  type        = "SecureString"
+  value       = random_password.auth_origin.result
+}
+
+# ---------------------------------------------------------------------------
+# Um papel por funcao, cada um so com os parametros que le. Os dois nascem com
+# o permissions boundary do bootstrap: o pipeline nao consegue criar papel
+# mais poderoso que isso.
 # ---------------------------------------------------------------------------
 
 data "aws_iam_policy_document" "assume_lambda" {
@@ -37,41 +56,70 @@ data "aws_iam_policy_document" "assume_lambda" {
   }
 }
 
-resource "aws_iam_role" "functions" {
-  name               = "${local.prefix}-functions"
-  assume_role_policy = data.aws_iam_policy_document.assume_lambda.json
+locals {
+  boundary_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/soat-function-boundary"
+  param_arn    = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter${local.param_prefix}"
 }
 
-data "aws_iam_policy_document" "functions" {
+resource "aws_iam_role" "auth_cpf" {
+  name                 = "${local.prefix}-auth-cpf"
+  assume_role_policy   = data.aws_iam_policy_document.assume_lambda.json
+  permissions_boundary = local.boundary_arn
+}
+
+data "aws_iam_policy_document" "auth_cpf" {
   statement {
-    sid       = "Logs"
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = ["${aws_cloudwatch_log_group.auth_cpf.arn}:*", "${aws_cloudwatch_log_group.notifier.arn}:*"]
+    resources = ["${aws_cloudwatch_log_group.auth_cpf.arn}:*"]
   }
-
   statement {
-    sid       = "ReadEnvironmentParameters"
+    actions = ["ssm:GetParameter"]
+    resources = [
+      "${local.param_arn}/db/url",
+      "${local.param_arn}/jwt/secret",
+      aws_ssm_parameter.auth_origin.arn,
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "auth_cpf" {
+  name   = "${local.prefix}-auth-cpf"
+  role   = aws_iam_role.auth_cpf.id
+  policy = data.aws_iam_policy_document.auth_cpf.json
+}
+
+resource "aws_iam_role" "notifier" {
+  name                 = "${local.prefix}-notifier"
+  assume_role_policy   = data.aws_iam_policy_document.assume_lambda.json
+  permissions_boundary = local.boundary_arn
+}
+
+data "aws_iam_policy_document" "notifier" {
+  statement {
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.notifier.arn}:*"]
+  }
+  statement {
     actions   = ["ssm:GetParameter"]
-    resources = ["arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter${local.param_prefix}/*"]
+    resources = [aws_ssm_parameter.notifier_webhook.arn]
   }
-
   statement {
-    sid       = "PublishAlerts"
     actions   = ["sns:Publish"]
     resources = [aws_sns_topic.alerts.arn]
   }
 }
 
-resource "aws_iam_role_policy" "functions" {
-  name   = "${local.prefix}-functions"
-  role   = aws_iam_role.functions.id
-  policy = data.aws_iam_policy_document.functions.json
+resource "aws_iam_role_policy" "notifier" {
+  name   = "${local.prefix}-notifier"
+  role   = aws_iam_role.notifier.id
+  policy = data.aws_iam_policy_document.notifier.json
 }
 
 # ---------------------------------------------------------------------------
 # Funcoes. Sem concorrencia reservada: a conta tem limite de 10 execucoes
-# simultaneas e a AWS exige que as 10 fiquem livres. A contencao de abuso fica
-# no rate limit do Kong (auth) e no segredo do webhook (notifier).
+# simultaneas e a AWS exige que as 10 fiquem livres. Risco residual aceito: as
+# duas funcoes disputam as mesmas 10 vagas. Contencao: segredo de origem na
+# autenticacao (so o Kong chama, com rate limit) e segredo Bearer no notifier.
 # ---------------------------------------------------------------------------
 
 data "archive_file" "auth_cpf" {
@@ -99,7 +147,7 @@ resource "aws_cloudwatch_log_group" "notifier" {
 resource "aws_lambda_function" "auth_cpf" {
   function_name    = "${local.prefix}-auth-cpf"
   description      = "Valida o CPF, consulta o cliente e devolve JWT de cliente"
-  role             = aws_iam_role.functions.arn
+  role             = aws_iam_role.auth_cpf.arn
   runtime          = "nodejs22.x"
   architectures    = ["arm64"]
   handler          = "index.handler"
@@ -110,8 +158,9 @@ resource "aws_lambda_function" "auth_cpf" {
 
   environment {
     variables = {
-      DB_URL_PARAM     = "${local.param_prefix}/db/url"
-      JWT_SECRET_PARAM = "${local.param_prefix}/jwt/secret"
+      DB_URL_PARAM        = "${local.param_prefix}/db/url"
+      JWT_SECRET_PARAM    = "${local.param_prefix}/jwt/secret"
+      ORIGIN_SECRET_PARAM = aws_ssm_parameter.auth_origin.name
     }
   }
 
@@ -123,10 +172,29 @@ resource "aws_lambda_function_url" "auth_cpf" {
   authorization_type = "NONE"
 }
 
+# Function URL com autorizacao NONE ainda exige politica de recurso: sem ela
+# toda chamada recebe 403. Desde 2025 sao duas permissoes, a da URL e a de
+# invocar a funcao por ela.
+resource "aws_lambda_permission" "auth_cpf_url" {
+  statement_id           = "FunctionUrlPublic"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.auth_cpf.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
+resource "aws_lambda_permission" "auth_cpf_invoke" {
+  statement_id             = "FunctionUrlInvoke"
+  action                   = "lambda:InvokeFunction"
+  function_name            = aws_lambda_function.auth_cpf.function_name
+  principal                = "*"
+  invoked_via_function_url = true
+}
+
 resource "aws_lambda_function" "notifier" {
   function_name    = "${local.prefix}-notifier"
   description      = "Recebe alertas do New Relic e publica no SNS"
-  role             = aws_iam_role.functions.arn
+  role             = aws_iam_role.notifier.arn
   runtime          = "nodejs22.x"
   architectures    = ["arm64"]
   handler          = "index.handler"
@@ -149,6 +217,25 @@ resource "aws_lambda_function" "notifier" {
 resource "aws_lambda_function_url" "notifier" {
   function_name      = aws_lambda_function.notifier.function_name
   authorization_type = "NONE"
+}
+
+# Function URL com autorizacao NONE ainda exige politica de recurso: sem ela
+# toda chamada recebe 403. Desde 2025 sao duas permissoes, a da URL e a de
+# invocar a funcao por ela.
+resource "aws_lambda_permission" "notifier_url" {
+  statement_id           = "FunctionUrlPublic"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.notifier.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
+resource "aws_lambda_permission" "notifier_invoke" {
+  statement_id             = "FunctionUrlInvoke"
+  action                   = "lambda:InvokeFunction"
+  function_name            = aws_lambda_function.notifier.function_name
+  principal                = "*"
+  invoked_via_function_url = true
 }
 
 # A URL do notifier tambem vai para o SSM: o Terraform do New Relic a le dali.

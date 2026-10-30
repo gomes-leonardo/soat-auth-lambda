@@ -1,5 +1,4 @@
-import { timingSafeEqual } from 'crypto';
-import { HttpEvent, HttpResult, json, log, parseBody } from '../shared/http';
+import { HttpEvent, HttpResult, json, log, parseBody, sameSecret } from '../shared/http';
 import { AlertPayload, formatAlert } from './format';
 
 export interface NotifierDeps {
@@ -16,7 +15,7 @@ export interface NotifierDeps {
 export function createNotifier(deps: NotifierDeps) {
   return async (event: HttpEvent): Promise<HttpResult> => {
     const presented = bearer(event.headers?.authorization ?? event.headers?.Authorization);
-    if (!presented || !matches(presented, await deps.webhookSecret())) {
+    if (!presented || !sameSecret(presented, await deps.webhookSecret())) {
       log('warn', 'notifier refused: invalid secret');
       return json(401, { error: 'unauthorized' });
     }
@@ -36,11 +35,4 @@ export function createNotifier(deps: NotifierDeps) {
 function bearer(header: string | undefined): string | null {
   const match = /^Bearer\s+(.+)$/i.exec(header ?? '');
   return match ? match[1].trim() : null;
-}
-
-/** Comparacao em tempo constante, como no WebhookAuthGuard da aplicacao. */
-function matches(presented: string, secret: string): boolean {
-  const a = Buffer.from(presented);
-  const b = Buffer.from(secret);
-  return a.length === b.length && timingSafeEqual(a, b);
 }
