@@ -1,0 +1,71 @@
+# Substituto local da Function URL de autenticacao por CPF, enquanto o Kong
+# aponta para dentro do cluster (auth_upstream=local em soat-infra-k8s). Le os
+# mesmos Secrets que a aplicacao: soat-db (dono: soat-infra-db) e soat-jwt
+# (dono: soat-infra-k8s/gateway). Removido na ativacao da Lambda.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soat-auth-local
+  labels:
+    app.kubernetes.io/name: soat-auth-local
+    app.kubernetes.io/part-of: soat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: soat-auth-local
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: soat-auth-local
+        app.kubernetes.io/part-of: soat
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: auth
+          image: IMAGE_PLACEHOLDER
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: soat-db
+            - secretRef:
+                name: soat-jwt
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ['ALL']
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: soat-auth-local
+  labels:
+    app.kubernetes.io/name: soat-auth-local
+    app.kubernetes.io/part-of: soat
+spec:
+  selector:
+    app.kubernetes.io/name: soat-auth-local
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

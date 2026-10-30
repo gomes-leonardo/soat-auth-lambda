@@ -1,0 +1,147 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run test:integration
+      - run: npm run build
+
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+      - run: terraform fmt -check -recursive
+      - run: |
+          for root in infra bootstrap; do
+            terraform -chdir=$root init -backend=false -input=false
+            terraform -chdir=$root validate
+          done
+
+  # develop -> hml, main -> prd. So em push: um pull request nunca assume o
+  # papel na AWS (o trust do OIDC tambem so aceita as duas branches).
+  deploy-aws:
+    name: Deploy Lambda (${{ github.ref_name == 'main' && 'prd' || 'hml' }})
+    needs: [test, terraform]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'prd' || 'hml' }}
+    concurrency: deploy-aws-${{ github.ref_name }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_ENV: ${{ github.ref_name == 'main' && 'prd' || 'hml' }}
+    steps:
+      - name: Conferir configuracao
+        run: |
+          missing=""
+          [ -n "${{ vars.AWS_ROLE_ARN }}" ] || missing="$missing AWS_ROLE_ARN"
+          [ -n "${{ vars.ALERT_EMAIL }}" ] || missing="$missing ALERT_EMAIL"
+          if [ -n "$missing" ]; then
+            echo "::error title=Deploy sem configuracao::faltam as variaveis:$missing (ver README, passo de bootstrap)"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: sa-east-1
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+      - name: Terraform apply
+        working-directory: infra
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=tfstate-backend-fiap-leo" \
+            -backend-config="key=soat-auth-lambda/infra/${TF_ENV}/terraform.tfstate"
+          terraform apply -input=false -auto-approve \
+            -var "environment=${TF_ENV}" \
+            -var "alert_email=${{ vars.ALERT_EMAIL }}"
+      - name: Resumo
+        working-directory: infra
+        run: |
+          {
+            echo "## Deploy ${TF_ENV}"
+            echo "- Autenticacao por CPF: $(terraform output -raw auth_function_url)"
+            echo "- Notifier: $(terraform output -raw notifier_function_url)"
+            echo "- Commit: ${GITHUB_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Imagem do substituto local, para o Kind de um Mac Apple Silicon (arm64).
+  publish-local:
+    name: Publish auth-local image
+    needs: [test]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: |
+          image=ghcr.io/${{ github.repository_owner }}/soat-auth-local
+          docker build -t "$image:${GITHUB_SHA}" .
+          docker push "$image:${GITHUB_SHA}"
+
+  # Enquanto o Kong aponta para dentro do cluster, o substituto local roda no
+  # namespace do ambiente. Na ativacao (vars.AUTH_MODE=lambda) o job remove o
+  # Deployment em vez de aplicar.
+  deploy-local:
+    name: Deploy auth-local no Kind (${{ github.ref_name == 'main' && 'prd' || 'hml' }})
+    needs: [publish-local]
+    if: github.event_name == 'push'
+    runs-on: [self-hosted, soat-kind]
+    environment: ${{ github.ref_name == 'main' && 'prd' || 'hml' }}
+    concurrency: deploy-local-${{ github.ref_name }}
+    env:
+      NAMESPACE: ${{ github.ref_name == 'main' && 'soat-prd' || 'soat-hml' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Aplicar ou remover
+        run: |
+          if [ "${{ vars.AUTH_MODE }}" = "lambda" ]; then
+            kubectl -n "$NAMESPACE" delete -f k8s/auth-local.yaml --ignore-not-found
+            echo "AUTH_MODE=lambda: substituto local removido" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          image=ghcr.io/${{ github.repository_owner }}/soat-auth-local:${GITHUB_SHA}
+          sed "s#IMAGE_PLACEHOLDER#${image}#" k8s/auth-local.yaml | kubectl -n "$NAMESPACE" apply -f -
+          kubectl -n "$NAMESPACE" rollout status deployment/soat-auth-local --timeout=120s
+          echo "auth-local em ${NAMESPACE}: ${image}" >> "$GITHUB_STEP_SUMMARY"

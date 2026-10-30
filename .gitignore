@@ -5,3 +5,4 @@ coverage/
 *.tfstate
 *.tfstate.*
 *.tfplan
+.build/
