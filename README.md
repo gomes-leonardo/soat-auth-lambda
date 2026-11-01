@@ -131,9 +131,11 @@ O pipeline (`.github/workflows/ci-cd.yml`) faz:
 | Pull request para `develop` ou `main` | typecheck, `format:check`, testes unitários e de integração, build, `terraform fmt` e `validate` de `infra/` e `bootstrap/` |
 | Push em `develop`                     | tudo acima + `terraform apply` no ambiente **hml** + imagem local no namespace `soat-hml`                                   |
 | Push em `main`                        | o mesmo, no ambiente **prd** e no namespace `soat-prd`                                                                      |
+| Disparo manual (`workflow_dispatch`)  | `acao=apply` recria as funções; `acao=destroy` remove tudo da AWS, no ambiente da branch escolhida                          |
 
 Os jobs, como aparecem no Actions: `Test`, `Terraform`, `Deploy Lambda (hml|prd)`,
-`Publish auth-local image` e `Deploy auth-local no Kind (hml|prd)`. Os dois de deploy no Kind rodam
+`Publish auth-local image`, `Deploy auth-local no Kind (hml|prd)` e, no disparo manual,
+`Destroy Lambda (hml|prd)`. Os dois de deploy no Kind rodam
 no runner self-hosted com as labels `[self-hosted, soat-kind]`, o mesmo dos outros repositórios.
 
 O acesso à AWS é por OIDC: o job de deploy assume o papel `gha-soat-deployer`. A confiança é por
@@ -154,7 +156,8 @@ tópicos `soat-*`.
    aws s3api put-public-access-block --bucket soat-tfstate-933643054958 \
      --public-access-block-configuration \
      BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-   terraform -chdir=bootstrap init && terraform -chdir=bootstrap apply
+   terraform -chdir=bootstrap init
+   terraform -chdir=bootstrap apply -var alert_email=voce@exemplo.com
    ```
    O `bootstrap/` guarda o state localmente, de propósito: ele cria o papel que o CI usa, então não
    pode depender do CI. Guarde o `terraform.tfstate` gerado.
@@ -178,6 +181,34 @@ tópicos `soat-*`.
    cluster.
 4. Depois do primeiro deploy de cada ambiente, confirmar a assinatura SNS pelo link que chega no
    e-mail. É o único passo manual: sem ele, o SNS não entrega.
+
+### Custo
+
+O uso normal fica no nível gratuito permanente da AWS (Lambda, SNS, SSM, logs com 7 dias de
+retenção). O único gasto possível é abuso das Function URLs públicas, e três travas o limitam:
+
+- **Disjuntor** (`bootstrap/cost-guard.tf`): um orçamento mensal de US$ 1, medido sem descontar
+  créditos promocionais, avisa por e-mail no primeiro centavo e, ao estourar, aciona a função
+  `cost-guard`, que zera a concorrência de toda função `soat-*`. A AWS passa a recusar as chamadas
+  sem executá-las, e chamada recusada não é cobrada. O Budgets atualiza algumas vezes por dia, então
+  ele age com horas de atraso; sob abuso, o próprio `cost-guard` disputa as 10 execuções simultâneas
+  da conta e pode demorar mais. A mesma função roda a cada 6 horas e reaplica o bloqueio enquanto o
+  gasto do mês estiver no limite, então religar ou recriar as funções não as deixa desprotegidas. O
+  Terraform ignora a concorrência das funções, e religar é decisão de uma pessoa (no mês seguinte,
+  ou depois de entender o gasto):
+  ```bash
+  aws lambda delete-function-concurrency --function-name soat-hml-auth-cpf --region sa-east-1
+  ```
+  Para testar a cadeia depois do bootstrap: `aws sns publish --topic-arn <arn do cost-guard>
+--message teste --region sa-east-1` bloqueia as funções; o comando acima as religa. E
+  `aws budgets describe-budget --account-id <conta> --budget-name soat-cost-guard` deve mostrar
+  `IncludeCredit: false`.
+- **Vida curta**: as funções só precisam existir para a demonstração e a avaliação. Fora disso,
+  rodar o workflow com `acao=destroy`; `acao=apply` recria. Antes do destroy, tirar `AUTH_MODE` de
+  `lambda`, para o Kong voltar ao substituto local, e lembrar que o Terraform do New Relic
+  (`soat-infra-k8s/newrelic`) lê a URL do notifier do SSM: ele só aplica com as funções no ar.
+- **Escopo do papel de deploy**: o `gha-soat-deployer` não tem permissão sobre EC2, RDS, EKS nem
+  rede, então o pipeline não cria nada fora das funções, do tópico e dos parâmetros.
 
 ### Deploy manual
 

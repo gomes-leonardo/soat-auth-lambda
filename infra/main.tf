@@ -138,6 +138,8 @@ resource "aws_iam_role_policy" "notifier" {
 # simultaneas e a AWS exige que as 10 fiquem livres. Risco residual aceito: as
 # duas funcoes disputam as mesmas 10 vagas. Contencao: segredo de origem na
 # autenticacao (so o Kong chama, com rate limit) e segredo Bearer no notifier.
+# A concorrencia fica fora do Terraform: o disjuntor do bootstrap a zera quando
+# o orcamento estoura, e um deploy nao pode religar o que ele desligou.
 # ---------------------------------------------------------------------------
 
 data "archive_file" "auth_cpf" {
@@ -183,6 +185,10 @@ resource "aws_lambda_function" "auth_cpf" {
   }
 
   depends_on = [aws_cloudwatch_log_group.auth_cpf]
+
+  lifecycle {
+    ignore_changes = [reserved_concurrent_executions]
+  }
 }
 
 resource "aws_lambda_function_url" "auth_cpf" {
@@ -230,6 +236,10 @@ resource "aws_lambda_function" "notifier" {
   }
 
   depends_on = [aws_cloudwatch_log_group.notifier]
+
+  lifecycle {
+    ignore_changes = [reserved_concurrent_executions]
+  }
 }
 
 resource "aws_lambda_function_url" "notifier" {
