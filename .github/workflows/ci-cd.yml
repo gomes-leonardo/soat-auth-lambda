@@ -5,6 +5,15 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  # As funcoes so precisam existir para a demo e a avaliacao: fora disso,
+  # `destroy` remove tudo da AWS e `apply` recria. Rodar a partir de develop
+  # (hml) ou main (prd).
+  workflow_dispatch:
+    inputs:
+      acao:
+        description: apply cria as funcoes; destroy remove tudo da AWS
+        type: choice
+        options: [apply, destroy]
 
 permissions:
   contents: read
@@ -41,12 +50,13 @@ jobs:
             terraform -chdir=$root validate
           done
 
-  # develop -> hml, main -> prd. So em push: um pull request nunca assume o
-  # papel na AWS (o trust do OIDC tambem so aceita as duas branches).
+  # develop -> hml, main -> prd. So em push ou disparo manual: um pull request
+  # nunca assume o papel na AWS (o trust do OIDC tambem so aceita as duas
+  # branches).
   deploy-aws:
     name: Deploy Lambda (${{ github.ref_name == 'main' && 'prd' || 'hml' }})
     needs: [test, terraform]
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || inputs.acao == 'apply'
     runs-on: ubuntu-latest
     environment: ${{ github.ref_name == 'main' && 'prd' || 'hml' }}
     concurrency: deploy-aws-${{ github.ref_name }}
@@ -98,6 +108,45 @@ jobs:
             echo "- Notifier: $(terraform output -raw notifier_function_url)"
             echo "- Commit: ${GITHUB_SHA}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  destroy-aws:
+    name: Destroy Lambda (${{ github.ref_name == 'main' && 'prd' || 'hml' }})
+    if: inputs.acao == 'destroy'
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'prd' || 'hml' }}
+    concurrency: deploy-aws-${{ github.ref_name }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_ENV: ${{ github.ref_name == 'main' && 'prd' || 'hml' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # O archive_file le os bundles ate no destroy.
+      - run: npm ci
+      - run: npm run build
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: sa-east-1
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+      - name: Terraform destroy
+        working-directory: infra
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=soat-tfstate-933643054958" \
+            -backend-config="key=soat-auth-lambda/infra/${TF_ENV}/terraform.tfstate"
+          terraform destroy -input=false -auto-approve \
+            -var "environment=${TF_ENV}" \
+            -var "alert_email=${{ vars.ALERT_EMAIL }}"
+          echo "## Funcoes de ${TF_ENV} removidas da AWS" >> "$GITHUB_STEP_SUMMARY"
 
   # Imagem do substituto local, para o Kind de um Mac Apple Silicon (arm64).
   publish-local:
