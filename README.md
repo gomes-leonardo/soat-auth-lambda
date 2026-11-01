@@ -149,11 +149,11 @@ tópicos `soat-*`.
 1. Com uma credencial de administrador local, criar o bucket dos states (versionado e sem acesso
    público) e aplicar o bootstrap:
    ```bash
-   aws s3api create-bucket --bucket soat-tfstate-933643054958 --region sa-east-1 \
+   aws s3api create-bucket --bucket soat-tfstate-310626828604 --region sa-east-1 \
      --create-bucket-configuration LocationConstraint=sa-east-1
-   aws s3api put-bucket-versioning --bucket soat-tfstate-933643054958 \
+   aws s3api put-bucket-versioning --bucket soat-tfstate-310626828604 \
      --versioning-configuration Status=Enabled
-   aws s3api put-public-access-block --bucket soat-tfstate-933643054958 \
+   aws s3api put-public-access-block --bucket soat-tfstate-310626828604 \
      --public-access-block-configuration \
      BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
    terraform -chdir=bootstrap init
@@ -188,7 +188,7 @@ O uso normal fica no nível gratuito permanente da AWS (Lambda, SNS, SSM, logs c
 retenção). O único gasto possível é abuso das Function URLs públicas, e três travas o limitam:
 
 - **Disjuntor** (`bootstrap/cost-guard.tf`): um orçamento mensal de US$ 1, medido sem descontar
-  créditos promocionais, avisa por e-mail no primeiro centavo e, ao estourar, aciona a função
+  créditos promocionais e só sobre os serviços do projeto (Lambda, SNS, CloudWatch, EventBridge), avisa por e-mail no primeiro centavo e, ao estourar, aciona a função
   `cost-guard`, que zera a concorrência de toda função `soat-*`. A AWS passa a recusar as chamadas
   sem executá-las, e chamada recusada não é cobrada. O Budgets atualiza algumas vezes por dia, então
   ele age com horas de atraso; sob abuso, o próprio `cost-guard` disputa as 10 execuções simultâneas
@@ -215,7 +215,7 @@ retenção). O único gasto possível é abuso das Function URLs públicas, e tr
 ```bash
 npm run build
 terraform -chdir=infra init \
-  -backend-config="bucket=soat-tfstate-933643054958" \
+  -backend-config="bucket=soat-tfstate-310626828604" \
   -backend-config="key=soat-auth-lambda/infra/hml/terraform.tfstate"
 terraform -chdir=infra apply -var environment=hml -var alert_email=voce@exemplo.com
 ```
