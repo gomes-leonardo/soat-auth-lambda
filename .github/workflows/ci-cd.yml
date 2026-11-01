@@ -84,7 +84,7 @@ jobs:
         working-directory: infra
         run: |
           terraform init -input=false \
-            -backend-config="bucket=tfstate-backend-fiap-leo" \
+            -backend-config="bucket=soat-tfstate-933643054958" \
             -backend-config="key=soat-auth-lambda/infra/${TF_ENV}/terraform.tfstate"
           terraform apply -input=false -auto-approve \
             -var "environment=${TF_ENV}" \
