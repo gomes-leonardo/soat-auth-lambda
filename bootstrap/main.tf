@@ -36,7 +36,7 @@ variable "repositories" {
 
 variable "state_bucket" {
   type    = string
-  default = "soat-tfstate-933643054958"
+  default = "soat-tfstate-310626828604"
 }
 
 data "aws_caller_identity" "current" {}

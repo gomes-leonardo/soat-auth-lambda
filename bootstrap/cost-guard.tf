@@ -51,6 +51,19 @@ resource "aws_budgets_budget" "cost_guard" {
     include_refund = false
   }
 
+  # So os servicos que o projeto usa: sobras antigas da conta (S3, KMS) nao
+  # disparam o disjuntor contra as funcoes.
+  cost_filter {
+    name = "Service"
+    values = [
+      "AWS Lambda",
+      "Amazon Simple Notification Service",
+      "AmazonCloudWatch",
+      "CloudWatch Events",
+      "Amazon EventBridge",
+    ]
+  }
+
   notification {
     comparison_operator        = "GREATER_THAN"
     threshold                  = 1
