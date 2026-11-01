@@ -28,6 +28,12 @@ variable "github_owner" {
   default = "gomes-leonardo"
 }
 
+variable "github_owner_id" {
+  description = "ID numerico do dono no GitHub, parte do sub imutavel do OIDC."
+  type        = string
+  default     = "102621896"
+}
+
 variable "repositories" {
   description = "Repositorios cujos pipelines podem assumir o papel."
   type        = list(string)
@@ -46,10 +52,15 @@ locals {
   # Jobs de deploy declaram `environment`, e o GitHub emite o sub nesse
   # formato. Cada Environment so aceita a sua branch (hml <- develop,
   # prd <- main), configurado no repositorio: pull request nunca chega aqui.
+  # Repositorios novos recebem do GitHub o sub imutavel, com os IDs numericos:
+  # repo:dono@<id>/repo@<id>:environment:hml. O ID do dono fica fixo; o do
+  # repositorio fica em aberto, mas so o dono cria repositorio com esse nome.
   subjects = flatten([
     for repo in var.repositories : [
-      "repo:${var.github_owner}/${repo}:environment:hml",
-      "repo:${var.github_owner}/${repo}:environment:prd",
+      for env in ["hml", "prd"] : [
+        "repo:${var.github_owner}/${repo}:environment:${env}",
+        "repo:${var.github_owner}@${var.github_owner_id}/${repo}@*:environment:${env}",
+      ]
     ]
   ])
   boundary_arn = "arn:aws:iam::${local.account}:policy/soat-function-boundary"
