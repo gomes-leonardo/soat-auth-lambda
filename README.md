@@ -144,8 +144,16 @@ tópicos `soat-*`.
 
 ### Uma vez, antes do primeiro deploy
 
-1. Com uma credencial de administrador local:
+1. Com uma credencial de administrador local, criar o bucket dos states (versionado e sem acesso
+   público) e aplicar o bootstrap:
    ```bash
+   aws s3api create-bucket --bucket soat-tfstate-933643054958 --region sa-east-1 \
+     --create-bucket-configuration LocationConstraint=sa-east-1
+   aws s3api put-bucket-versioning --bucket soat-tfstate-933643054958 \
+     --versioning-configuration Status=Enabled
+   aws s3api put-public-access-block --bucket soat-tfstate-933643054958 \
+     --public-access-block-configuration \
+     BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
    terraform -chdir=bootstrap init && terraform -chdir=bootstrap apply
    ```
    O `bootstrap/` guarda o state localmente, de propósito: ele cria o papel que o CI usa, então não
@@ -176,7 +184,7 @@ tópicos `soat-*`.
 ```bash
 npm run build
 terraform -chdir=infra init \
-  -backend-config="bucket=tfstate-backend-fiap-leo" \
+  -backend-config="bucket=soat-tfstate-933643054958" \
   -backend-config="key=soat-auth-lambda/infra/hml/terraform.tfstate"
 terraform -chdir=infra apply -var environment=hml -var alert_email=voce@exemplo.com
 ```

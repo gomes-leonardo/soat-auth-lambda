@@ -31,7 +31,7 @@ variable "repositories" {
 
 variable "state_bucket" {
   type    = string
-  default = "tfstate-backend-fiap-leo"
+  default = "soat-tfstate-933643054958"
 }
 
 data "aws_caller_identity" "current" {}
