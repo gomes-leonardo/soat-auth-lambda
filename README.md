@@ -200,7 +200,9 @@ retenção). O único gasto possível é abuso das Function URLs públicas, e tr
   aws lambda delete-function-concurrency --function-name soat-hml-auth-cpf --region sa-east-1
   ```
   Para testar a cadeia depois do bootstrap: `aws sns publish --topic-arn <arn do cost-guard>
---message teste --region sa-east-1` bloqueia as funções; o comando acima as religa.
+--message teste --region sa-east-1` bloqueia as funções; o comando acima as religa. E
+  `aws budgets describe-budget --account-id <conta> --budget-name soat-cost-guard` deve mostrar
+  `IncludeCredit: false`.
 - **Vida curta**: as funções só precisam existir para a demonstração e a avaliação. Fora disso,
   rodar o workflow com `acao=destroy`; `acao=apply` recria. Antes do destroy, tirar `AUTH_MODE` de
   `lambda`, para o Kong voltar ao substituto local, e lembrar que o Terraform do New Relic

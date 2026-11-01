@@ -90,8 +90,10 @@ data "archive_file" "cost_guard" {
           budget = budgets.describe_budget(
               AccountId=os.environ["ACCOUNT_ID"], BudgetName=os.environ["BUDGET_NAME"]
           )["Budget"]
-          spent = float(budget["CalculatedSpend"]["ActualSpend"]["Amount"])
-          return spent >= float(budget["BudgetLimit"]["Amount"])
+          # Orcamento recem-criado pode vir sem calculo ainda: conta como zero.
+          spent = budget.get("CalculatedSpend", {}).get("ActualSpend", {}).get("Amount", "0")
+          print({"spent": spent, "limit": budget["BudgetLimit"]["Amount"]})
+          return float(spent) >= float(budget["BudgetLimit"]["Amount"])
 
 
       def throttle_all():
