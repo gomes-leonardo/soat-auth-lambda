@@ -121,6 +121,15 @@ jobs:
     env:
       TF_ENV: ${{ github.ref_name == 'main' && 'prd' || 'hml' }}
     steps:
+      - name: Conferir configuracao
+        run: |
+          missing=""
+          [ -n "${{ vars.AWS_ROLE_ARN }}" ] || missing="$missing AWS_ROLE_ARN"
+          [ -n "${{ vars.ALERT_EMAIL }}" ] || missing="$missing ALERT_EMAIL"
+          if [ -n "$missing" ]; then
+            echo "::error title=Destroy sem configuracao::faltam as variaveis:$missing (ver README, passo de bootstrap)"
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:

@@ -1,5 +1,6 @@
 # Aplicado UMA vez, por uma pessoa, com credencial de administrador local:
-#   terraform -chdir=bootstrap init && terraform -chdir=bootstrap apply
+#   terraform -chdir=bootstrap init
+#   terraform -chdir=bootstrap apply -var alert_email=voce@exemplo.com
 # Cria o provedor OIDC do GitHub e o papel que os pipelines dos quatro
 # repositorios assumem. Sem chave de acesso guardada em secret nenhum.
 # State local de proposito: e o que cria o acesso aos outros states.

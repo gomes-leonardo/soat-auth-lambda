@@ -187,15 +187,20 @@ tópicos `soat-*`.
 O uso normal fica no nível gratuito permanente da AWS (Lambda, SNS, SSM, logs com 7 dias de
 retenção). O único gasto possível é abuso das Function URLs públicas, e três travas o limitam:
 
-- **Disjuntor** (`bootstrap/cost-guard.tf`): um orçamento mensal de US$ 1 avisa por e-mail no
-  primeiro centavo e, ao estourar, aciona a função `cost-guard`, que zera a concorrência de toda
-  função `soat-*`. A AWS passa a recusar as chamadas sem executá-las, e chamada recusada não é
-  cobrada. O Budgets atualiza algumas vezes por dia, então ele age com horas de atraso. O Terraform
-  ignora a concorrência das funções, então um deploy não religa o que o disjuntor desligou; religar
-  é decisão de uma pessoa:
+- **Disjuntor** (`bootstrap/cost-guard.tf`): um orçamento mensal de US$ 1, medido sem descontar
+  créditos promocionais, avisa por e-mail no primeiro centavo e, ao estourar, aciona a função
+  `cost-guard`, que zera a concorrência de toda função `soat-*`. A AWS passa a recusar as chamadas
+  sem executá-las, e chamada recusada não é cobrada. O Budgets atualiza algumas vezes por dia, então
+  ele age com horas de atraso; sob abuso, o próprio `cost-guard` disputa as 10 execuções simultâneas
+  da conta e pode demorar mais. A mesma função roda a cada 6 horas e reaplica o bloqueio enquanto o
+  gasto do mês estiver no limite, então religar ou recriar as funções não as deixa desprotegidas. O
+  Terraform ignora a concorrência das funções, e religar é decisão de uma pessoa (no mês seguinte,
+  ou depois de entender o gasto):
   ```bash
   aws lambda delete-function-concurrency --function-name soat-hml-auth-cpf --region sa-east-1
   ```
+  Para testar a cadeia depois do bootstrap: `aws sns publish --topic-arn <arn do cost-guard>
+--message teste --region sa-east-1` bloqueia as funções; o comando acima as religa.
 - **Vida curta**: as funções só precisam existir para a demonstração e a avaliação. Fora disso,
   rodar o workflow com `acao=destroy`; `acao=apply` recria. Antes do destroy, tirar `AUTH_MODE` de
   `lambda`, para o Kong voltar ao substituto local, e lembrar que o Terraform do New Relic
