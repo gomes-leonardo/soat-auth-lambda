@@ -1,5 +1,6 @@
 # Aplicado UMA vez, por uma pessoa, com credencial de administrador local:
-#   terraform -chdir=bootstrap init && terraform -chdir=bootstrap apply
+#   terraform -chdir=bootstrap init
+#   terraform -chdir=bootstrap apply -var alert_email=voce@exemplo.com
 # Cria o provedor OIDC do GitHub e o papel que os pipelines dos quatro
 # repositorios assumem. Sem chave de acesso guardada em secret nenhum.
 # State local de proposito: e o que cria o acesso aos outros states.
@@ -10,6 +11,10 @@ terraform {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 6.0"
+    }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.7"
     }
   }
 }
@@ -23,6 +28,12 @@ variable "github_owner" {
   default = "gomes-leonardo"
 }
 
+variable "github_owner_id" {
+  description = "ID numerico do dono no GitHub, parte do sub imutavel do OIDC."
+  type        = string
+  default     = "102621896"
+}
+
 variable "repositories" {
   description = "Repositorios cujos pipelines podem assumir o papel."
   type        = list(string)
@@ -31,7 +42,7 @@ variable "repositories" {
 
 variable "state_bucket" {
   type    = string
-  default = "tfstate-backend-fiap-leo"
+  default = "soat-tfstate-310626828604"
 }
 
 data "aws_caller_identity" "current" {}
@@ -41,10 +52,15 @@ locals {
   # Jobs de deploy declaram `environment`, e o GitHub emite o sub nesse
   # formato. Cada Environment so aceita a sua branch (hml <- develop,
   # prd <- main), configurado no repositorio: pull request nunca chega aqui.
+  # Repositorios novos recebem do GitHub o sub imutavel, com os IDs numericos:
+  # repo:dono@<id>/repo@<id>:environment:hml. O ID do dono fica fixo; o do
+  # repositorio fica em aberto, mas so o dono cria repositorio com esse nome.
   subjects = flatten([
     for repo in var.repositories : [
-      "repo:${var.github_owner}/${repo}:environment:hml",
-      "repo:${var.github_owner}/${repo}:environment:prd",
+      for env in ["hml", "prd"] : [
+        "repo:${var.github_owner}/${repo}:environment:${env}",
+        "repo:${var.github_owner}@${var.github_owner_id}/${repo}@*:environment:${env}",
+      ]
     ]
   ])
   boundary_arn = "arn:aws:iam::${local.account}:policy/soat-function-boundary"
